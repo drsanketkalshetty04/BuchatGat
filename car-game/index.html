@@ -412,7 +412,7 @@ for (var ti=0; ti<14; ti++){
 /* ---------- state ---------- */
 var STAGE_LEN = 800, WHEEL_LOCK = 130;
 var state = 'menu', dist = 0, bonus = 0, stage = 0, health = 100, nitro = 30, pickups = 0, passes = 0, invuln = 0, hornCd = 0, boosting = false;
-var shake = 0, time = 0, tiltWarn = 0, camYaw = 0;
+var shake = 0, time = 0, tiltWarn = 0, camYaw = 0, yawRate = 0;
 var input = {gas:false, brake:false, nitro:false, wheel:0, keyL:false, keyR:false, steer:0};
 var tilt = {seen:false, src:'', raw:0, zero:0, started:false}, mode = 'touch';
 
@@ -446,7 +446,7 @@ function spawnCoins(){
 
 function reset(){
   dist = 0; bonus = 0; stage = 0; health = 100; nitro = 30; pickups = 0; passes = 0; invuln = 0; shake = 0; coinTimer = 3;
-  player.x = LANES[1]; player.speed = 0; player.yaw = 0; input.steer = 0; camYaw = 0;
+  player.x = LANES[1]; player.speed = 0; player.yaw = 0; input.steer = 0; camYaw = 0; yawRate = 0;
   traffic.forEach(function(c){ c.active = false; c.mesh.visible = false; c.respawn = 0; });
   coins.forEach(function(c){ c.visible = false; });
   for (var i=0;i<5;i++) spawn(traffic[i<4?i:11], 50, 420);
@@ -666,13 +666,13 @@ function update(dt){
   // steering input
   var target = 0;
   if (playing){
-    if (mode==='tilt'){ target = clamp((tilt.raw - tilt.zero)/[38,26,17][save.sens], -1, 1)*(save.invert?-1:1); target = Math.abs(target) < 0.03 ? 0 : (target<0?-1:1)*Math.pow(Math.abs(target), 1.25); }
+    if (mode==='tilt'){ target = clamp((tilt.raw - tilt.zero)/[38,26,17][save.sens], -1, 1)*(save.invert?-1:1); target = Math.abs(target) < 0.03 ? 0 : (target<0?-1:1)*Math.pow(Math.abs(target), 1.5); }
     else target = input.wheel;
     if (input.keyL) target -= 1;
     if (input.keyR) target += 1;
     target = clamp(target,-1,1);
   }
-  input.steer += (target - input.steer)*Math.min(1, dt*(mode==='tilt'?14:(target===0?5:16)));
+  input.steer += (target - input.steer)*Math.min(1, dt*(target===0?5:7));
   // speed
   boosting = playing && input.nitro && nitro > 0 && player.speed > 3;
   if (playing){
@@ -689,13 +689,16 @@ function update(dt){
   var v = player.speed, move = (state==='pause') ? 0 : v*Math.cos(player.yaw)*dt;
   // heading & lateral motion
   if (playing){
-    var turn = input.steer*1.55*d.grip*wet*Math.min(1, v/9)/(1 + v/30);
-    player.yaw = clamp(player.yaw + turn*dt, -0.6, 0.6);
-    if (Math.abs(input.steer) < 0.12) player.yaw -= player.yaw*Math.min(1, dt*(0.8 + v/40));   // caster: the car straightens when you let the wheel go
+    var turn = input.steer*1.05*d.grip*wet*Math.min(1, v/9)/(1 + v/24);
+    yawRate += (turn - yawRate)*Math.min(1, dt*5);            // the car eases into and out of a turn
+    player.yaw = clamp(player.yaw + yawRate*dt, -0.42, 0.42);
+    player.yaw -= player.yaw*Math.min(1, dt*(1 - Math.min(1, Math.abs(input.steer)*4))*(1.2 + v/30));   // caster: it straightens as the wheel returns to centre
     player.x += Math.sin(player.yaw)*v*dt;
     var lim = ROAD_HALF - player.wid/2;
-    if (Math.abs(player.x) > lim){ player.x = clamp(player.x,-lim,lim); player.speed *= Math.max(0, 1 - 1.4*dt); player.yaw *= -0.25;
-      if (v > 12) hit(4 + v*0.12, false); }
+    var edge = Math.abs(player.x) - (lim - 0.5), side = player.x > 0 ? 1 : -1;
+    if (edge > 0 && player.yaw*side > -0.02){                 // kerb guide: ease the nose back onto the road, no speed lost
+      player.yaw += (-side*0.03 - player.yaw)*Math.min(1, dt*(4 + edge*14)); yawRate *= 0.5; }
+    player.x = clamp(player.x, -lim, lim);
     dist += move;
     var st = Math.floor(dist/STAGE_LEN);
     if (st > stage && state==='play'){ stage = st; bonus += 100; setEnv(stage, false);
@@ -748,7 +751,7 @@ function update(dt){
           if (hx - ax < hz - az){            // side contact: slide apart
             player.x += (player.x > c.x ? 1 : -1)*(hx - ax); player.yaw *= 0.3; player.speed *= 0.97; hit(9, false);
           } else if (c.z < 0){               // ran into the back of it
-            c.z = -hz; hit(8 + rel*4.2, rel > 7); player.speed = Math.min(player.speed, c.speed*0.8); c.speed += Math.min(6, rel*0.4);
+            c.z = -hz; hit(8 + rel*3, rel > 7); player.speed = Math.min(player.speed, c.speed*0.8); c.speed += Math.min(6, rel*0.4);
           } else { c.z = hz; c.speed = Math.min(c.speed, v*0.9); hit(8, false); }
           playing = state==='play';
         } else if (!c.passed && c.z > hz){ c.passed = true;
@@ -790,7 +793,7 @@ function update(dt){
       camera.lookAt(player.x + Math.sin(player.yaw)*30, player.eye[0]-0.25, -Math.cos(player.yaw)*30);
       camera.rotation.z += -input.steer*Math.min(1,v/30)*0.02;
     } else {
-      camYaw += (player.yaw*0.75 - camYaw)*Math.min(1, dt*4);
+      camYaw += (player.yaw*0.7 - camYaw)*Math.min(1, dt*3);
       var cd = portrait?9.2:7.6;
       camera.position.set(player.x - Math.sin(camYaw)*cd + (rand()-.5)*sh*1.4, (portrait?3.9:3.1) + (rand()-.5)*sh, Math.cos(camYaw)*cd);
       camera.lookAt(player.x + Math.sin(camYaw)*12, 1.1, -Math.cos(camYaw)*12);
